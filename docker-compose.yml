@@ -1,0 +1,9 @@
+# Paystream local infrastructure
+# Filled in on Week 1 Day 2.
+# Ports are intentionally offset to avoid conflict with other local stacks:
+#   MySQL    -> 3307
+#   Redis    -> 6380
+#   Kafka    -> 9093
+#   Kafka UI -> 8081
+
+services: {}
