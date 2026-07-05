@@ -1,9 +1,98 @@
-# Paystream local infrastructure
-# Filled in on Week 1 Day 2.
-# Ports are intentionally offset to avoid conflict with other local stacks:
-#   MySQL    -> 3307
-#   Redis    -> 6380
-#   Kafka    -> 9093
-#   Kafka UI -> 8081
 
-services: {}
+name: paystream
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: paystream-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_PORT}:3306"
+    volumes:
+      - paystream-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: paystream-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - paystream-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    command: ["redis-server", "--appendonly", "yes"]
+
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: paystream-kafka
+    restart: unless-stopped
+    ports:
+      # host:container -- external broker access from your machine
+      - "${KAFKA_PORT}:9093"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Three listeners on three different ports inside the container:
+      #  9092 -> CONTROLLER  (raft quorum only, not for clients)
+      #  9093 -> EXTERNAL    (from your host, mapped to KAFKA_PORT)
+      #  9094 -> INTERNAL    (from other Docker containers e.g. Kafka UI)
+      KAFKA_LISTENERS: CONTROLLER://:9092,EXTERNAL://:9093,INTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://localhost:${KAFKA_PORT},INTERNAL://kafka:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9092
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CLUSTER_ID: paystream-cluster-01
+    volumes:
+      - paystream-kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Use INTERNAL listener from inside the container
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9094 --list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: paystream-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${KAFKA_UI_PORT}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: paystream-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094
+      DYNAMIC_CONFIG_ENABLED: "true"
+
+volumes:
+  paystream-mysql-data:
+  paystream-redis-data:
+  paystream-kafka-data:
